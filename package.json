@@ -1,31 +1,48 @@
 {
   "name": "neuro-sales-widget",
   "version": "2.0.0",
-  "description": "Интерактивный чат-виджет нейропродавца с интеграцией GPT-5, голосовым взаимодействием и Telegram уведомлениями",
+  "description": "Interactive AI sales chatbot widget with GPT-4o integration, voice recognition, and Telegram notifications",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon server/index.js",
-    "test": "echo \"Test functionality coming soon\" && exit 0"
+    "test": "echo \"Tests coming soon\" && exit 0",
+    "lint": "eslint server/**/*.js public/**/*.js",
+    "docker:build": "docker build -t neuro-sales-widget:latest .",
+    "docker:run": "docker-compose up -d",
+    "docker:stop": "docker-compose down"
   },
   "keywords": [
     "sales",
     "chatbot",
-    "gpt-5",
+    "gpt-4o",
     "voice-recognition",
     "telegram",
     "widget",
-    "lead-generation"
+    "lead-generation",
+    "ai",
+    "openai"
   ],
   "author": "lidorubov.net",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/goqorhopar/neuro-sales-widget.git"
+  },
+  "bugs": {
+    "url": "https://github.com/goqorhopar/neuro-sales-widget/issues"
+  },
+  "homepage": "https://github.com/goqorhopar/neuro-sales-widget#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "express": "^4.18.2",
+    "axios": "^1.6.2",
+    "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "openai": "^4.20.0",
-    "axios": "^1.6.2",
-    "body-parser": "^1.20.2"
+    "express": "^4.18.2",
+    "openai": "^4.20.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
