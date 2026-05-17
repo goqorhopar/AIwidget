@@ -4,18 +4,44 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const OpenAI = require('openai');
 const axios = require('axios');
+const { AppError, errorHandler, asyncHandler } = require('./middleware/errorHandler');
+const { validateChatRequest, rateLimiter } = require('./middleware/validator');
+const logger = require('./utils/logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static('public'));
+// Security middleware - rate limiting
+app.use(rateLimiter(100, 60000)); // 100 requests per minute per IP
 
-// OpenAI Configuration
+// Logging middleware
+app.use(logger.requestLogger);
+
+// Middleware
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(bodyParser.json({ limit: '1mb' }));
+app.use(express.static('public', {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true
+}));
+
+// Request ID middleware
+app.use((req, res, next) => {
+  req.id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  res.setHeader('X-Request-ID', req.id);
+  next();
+});
+
+// OpenAI Configuration with retry logic
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+  maxRetries: 3,
+  timeout: 30000,
 });
 
 // Системный промпт для нейропродавца
@@ -240,14 +266,15 @@ function analyzeClientNeeds(conversationText) {
   return needs;
 }
 
-// API Endpoint для чата
-app.post('/api/chat', async (req, res) => {
-  try {
+// API Endpoint для чата с валидацией и обработкой ошибок
+app.post('/api/chat', 
+  asyncHandler(async (req, res) => {
+    // Validate request
+    validateChatRequest(req, res, () => {});
+    
     const { message, sessionId } = req.body;
     
-    if (!message || !sessionId) {
-      return res.status(400).json({ error: 'Требуются message и sessionId' });
-    }
+    logger.info('Chat request received', { sessionId, messageLength: message.length });
     
     // Получаем или создаем историю диалога
     if (!conversations.has(sessionId)) {
@@ -257,15 +284,30 @@ app.post('/api/chat', async (req, res) => {
     }
     
     const conversationHistory = conversations.get(sessionId);
+    
+    // Limit conversation history to prevent memory issues
+    if (conversationHistory.length > 20) {
+      // Keep system prompt and last 19 messages
+      const systemPrompt = conversationHistory[0];
+      const recentMessages = conversationHistory.slice(-19);
+      conversationHistory.splice(0, conversationHistory.length, systemPrompt, ...recentMessages);
+    }
+    
     conversationHistory.push({ role: 'user', content: message });
     
-    // Вызов OpenAI API (предполагаем, что GPT-5 будет доступен как 'gpt-5' или 'gpt-5-turbo')
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-5', // Изменено на GPT-5
-      messages: conversationHistory,
-      temperature: parseFloat(process.env.OPENAI_TEMPERATURE) || 0.3,
-      max_tokens: 800, // Увеличиваем лимит для более сложной модели
-    });
+    // Вызов OpenAI API с retry logic
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o',
+        messages: conversationHistory,
+        temperature: parseFloat(process.env.OPENAI_TEMPERATURE) || 0.3,
+        max_tokens: 800,
+      });
+    } catch (openaiError) {
+      logger.error('OpenAI API error', { error: openaiError.message });
+      throw new AppError('Failed to get AI response', 503, 'OPENAI_ERROR');
+    }
     
     const aiResponse = completion.choices[0].message.content;
     conversationHistory.push({ role: 'assistant', content: aiResponse });
@@ -275,42 +317,88 @@ app.post('/api/chat', async (req, res) => {
     const contacts = extractContacts(message);
     
     if (leadStage || contacts.hasContacts) {
-      // Отправляем уведомление в Telegram
-      await sendTelegramNotification({
+      // Отправляем уведомление в Telegram (не блокируем ответ)
+      sendTelegramNotification({
         stage: leadStage || 'Оставил контакты',
         contacts,
         userMessage: message,
         conversationHistory: conversationHistory.filter(msg => msg.role !== 'system')
+      }).catch(err => {
+        logger.error('Telegram notification failed', { error: err.message });
       });
     }
     
+    logger.info('Chat response sent', { sessionId, isLead: !!leadStage || contacts.hasContacts });
+    
     res.json({
+      success: true,
       response: aiResponse,
       isLead: !!leadStage || contacts.hasContacts,
-      leadStage
+      leadStage,
+      requestId: req.id
     });
-    
-  } catch (error) {
-    console.error('Ошибка в /api/chat:', error);
-    res.status(500).json({ 
-      error: 'Ошибка сервера',
-      message: error.message 
-    });
-  }
-});
+  })
+);
 
-// Healthcheck endpoint
+// Healthcheck endpoint with detailed status
 app.get('/api/health', (req, res) => {
   res.json({ 
+    success: true,
     status: 'ok',
     version: process.env.SALES_SCRIPT_VERSION || '1.0',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
-// Запуск сервера
-app.listen(PORT, () => {
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: {
+      code: 'NOT_FOUND',
+      message: 'Endpoint not found'
+    }
+  });
+});
+
+// Global error handler (must be last)
+app.use(errorHandler);
+
+// Graceful shutdown
+const server = app.listen(PORT, () => {
+  logger.info('Server started', { 
+    port: PORT, 
+    environment: process.env.NODE_ENV || 'development',
+    version: process.env.SALES_SCRIPT_VERSION || '1.0'
+  });
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
   console.log(`📊 Версия скрипта: ${process.env.SALES_SCRIPT_VERSION || '1.0'}`);
-  console.log(`🤖 Модель OpenAI: ${process.env.OPENAI_MODEL || 'gpt-4'}`);
+  console.log(`🤖 Модель OpenAI: ${process.env.OPENAI_MODEL || 'gpt-4o'}`);
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received. Shutting down gracefully...');
+  server.close(() => {
+    logger.info('Process terminated');
+    process.exit(0);
+  });
+  
+  // Force close after 10 seconds
+  setTimeout(() => {
+    logger.error('Forced shutdown due to timeout');
+    process.exit(1);
+  }, 10000);
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', { reason: reason?.message || reason });
+  process.exit(1);
 });
