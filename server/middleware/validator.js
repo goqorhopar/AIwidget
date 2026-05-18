@@ -13,23 +13,25 @@ const validateChatRequestRules = [
     .exists({ checkFalsy: true }).withMessage('Message is required')
     .isString().withMessage('Message must be a string')
     .trim()
+    .escape() // Sanitize to prevent XSS
     .isLength({ max: 2000 }).withMessage('Message too long (max 2000 characters)'),
-  
+
   body('sessionId')
     .exists({ checkFalsy: true }).withMessage('Session ID is required')
     .isString().withMessage('Session ID must be a string')
     .trim()
+    .isLength({ max: 256 }).withMessage('Session ID too long (max 256 characters)')
 ];
 
 // Middleware to handle validation results
 const validateChatRequest = (req, res, next) => {
   const errors = validationResult(req);
-  
+
   if (!errors.isEmpty()) {
     const errorMessages = errors.array().map(err => err.msg);
     throw new AppError(errorMessages.join(', '), 400, 'VALIDATION_ERROR');
   }
-  
+
   next();
 };
 
@@ -52,6 +54,10 @@ const createRateLimiter = (maxRequests = 100, windowMs = 60000) => {
     },
     handler: (req, res, next, options) => {
       res.status(429).json(options.message);
+    },
+    skip: (req) => {
+      // Skip rate limiting for health checks
+      return req.path === '/api/health' || req.path === '/metrics';
     }
   });
 };
@@ -60,10 +66,10 @@ const createRateLimiter = (maxRequests = 100, windowMs = 60000) => {
 const conversationStore = new Map();
 
 // Cleanup old conversations periodically
-setInterval(() => {
+const cleanupIntervalId = setInterval(() => {
   const now = Date.now();
   const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT_MS, 10) || 3600000; // 1 hour default
-  
+
   for (const [sessionId, data] of conversationStore.entries()) {
     if (data.lastAccessed && (now - data.lastAccessed > sessionTimeout)) {
       conversationStore.delete(sessionId);
@@ -71,9 +77,15 @@ setInterval(() => {
   }
 }, 60000); // Run every minute
 
+// Export cleanup function for testing
+const clearCleanupInterval = () => {
+  clearInterval(cleanupIntervalId);
+};
+
 module.exports = {
   validateChatRequestRules,
   validateChatRequest,
   createRateLimiter,
-  conversationStore
+  conversationStore,
+  clearCleanupInterval
 };
