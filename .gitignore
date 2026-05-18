@@ -1,15 +1,16 @@
 ```
+# Coverage reports
+coverage/
+*.lcov
+*.lcov.info
+
 # Dependencies
 node_modules/
 
-# Environment variables
+# Environment
+.env
 .env.local
-.env.
-
-# Build artifacts
-dist/
-build/
-target/
+*.env.*
 
 # Logs
 *.log
@@ -21,36 +22,25 @@ target/
 *.swo
 *.tmp
 
+# Build artifacts
+dist/
+build/
+target/
+*.out
+*.exe
+*.dll
+*.so
+*.a
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git/modules/
-.DS_Store
-*.swp
-*~
-.pytest_cache/
-.mypy_cache/
-.hypothesis/
-
-# System
-.DS_Store
-Thumbs.db
+*.py.class
+*.py.obj
+*.py.out
 
 # Compressed files
 *.zip
