@@ -43,7 +43,7 @@ const logger = winston.createLogger({
     new winston.transports.Console({
       format: process.env.NODE_ENV === 'production' ? jsonFormat : devFormat
     }),
-    
+
     // File transport for errors (production only)
     ...(process.env.NODE_ENV === 'production' ? [
       new winston.transports.File({
@@ -59,7 +59,7 @@ const logger = winston.createLogger({
       })
     ] : [])
   ],
-  
+
   // Exit on error (optional, can be disabled)
   exitOnError: false
 });
@@ -67,7 +67,7 @@ const logger = winston.createLogger({
 // Request logging middleware
 const requestLogger = (req, res, next) => {
   const start = Date.now();
-  
+
   res.on('finish', () => {
     const duration = Date.now() - start;
     logger.info('HTTP Request', {
@@ -80,7 +80,7 @@ const requestLogger = (req, res, next) => {
       requestId: req.id
     });
   });
-  
+
   next();
 };
 

@@ -4,8 +4,13 @@
 
 const request = require('supertest');
 const express = require('express');
-const { validateChatRequestRules, validateChatRequest } = require('../server/middleware/validator');
+const { validateChatRequestRules, validateChatRequest, clearCleanupInterval } = require('../server/middleware/validator');
 const { AppError, errorHandler } = require('../server/middleware/errorHandler');
+
+// Cleanup interval after tests to prevent open handles
+afterAll(() => {
+  clearCleanupInterval();
+});
 
 describe('Validator Middleware', () => {
   let app;
@@ -17,7 +22,7 @@ describe('Validator Middleware', () => {
 
   describe('validateChatRequest', () => {
     it('should pass valid request', async () => {
-      app.post('/test', 
+      app.post('/test',
         validateChatRequestRules,
         validateChatRequest,
         (req, res) => res.json({ success: true })
@@ -79,6 +84,40 @@ describe('Validator Middleware', () => {
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
     });
+
+    it('should sanitize input to prevent XSS', async () => {
+      app.post('/test',
+        validateChatRequestRules,
+        validateChatRequest,
+        (req, res) => res.json({ success: true, message: req.body.message })
+      );
+
+      const xssMessage = '<script>alert("xss")</script>Hello';
+      const response = await request(app)
+        .post('/test')
+        .send({ message: xssMessage, sessionId: 'session-123' });
+
+      expect(response.status).toBe(200);
+      // The message should be escaped
+      expect(response.body.message).not.toContain('<script>');
+    });
+
+    it('should reject sessionId over 256 characters', async () => {
+      app.post('/test',
+        validateChatRequestRules,
+        validateChatRequest,
+        (req, res) => res.json({ success: true }),
+        errorHandler
+      );
+
+      const longSessionId = 's'.repeat(257);
+      const response = await request(app)
+        .post('/test')
+        .send({ message: 'Hello', sessionId: longSessionId });
+
+      expect(response.status).toBe(400);
+      expect(response.body.success).toBe(false);
+    });
   });
 });
 
@@ -102,7 +141,7 @@ describe('AppError', () => {
 describe('Error Handler Middleware', () => {
   it('should handle operational errors correctly', () => {
     const error = new AppError('Test error', 400, 'BAD_REQUEST');
-    
+
     const mockReq = {};
     const mockRes = {
       status: jest.fn().mockReturnThis(),
