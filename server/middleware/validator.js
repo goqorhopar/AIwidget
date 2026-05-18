@@ -1,97 +1,79 @@
 /**
  * Request Validation Middleware
- * Validates incoming request data
+ * Validates incoming request data with express-validator
  */
 
+const { body, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const { AppError } = require('./errorHandler');
 
-// Validate chat request
+// Validation rules for chat request
+const validateChatRequestRules = [
+  body('message')
+    .exists({ checkFalsy: true }).withMessage('Message is required')
+    .isString().withMessage('Message must be a string')
+    .trim()
+    .isLength({ max: 2000 }).withMessage('Message too long (max 2000 characters)'),
+  
+  body('sessionId')
+    .exists({ checkFalsy: true }).withMessage('Session ID is required')
+    .isString().withMessage('Session ID must be a string')
+    .trim()
+];
+
+// Middleware to handle validation results
 const validateChatRequest = (req, res, next) => {
-  const { message, sessionId } = req.body;
+  const errors = validationResult(req);
   
-  // Check if message exists
-  if (!message || typeof message !== 'string') {
-    throw new AppError('Message is required and must be a string', 400, 'VALIDATION_ERROR');
+  if (!errors.isEmpty()) {
+    const errorMessages = errors.array().map(err => err.msg);
+    throw new AppError(errorMessages.join(', '), 400, 'VALIDATION_ERROR');
   }
-  
-  // Trim and check message length
-  const trimmedMessage = message.trim();
-  if (trimmedMessage.length === 0) {
-    throw new AppError('Message cannot be empty', 400, 'VALIDATION_ERROR');
-  }
-  
-  // Max message length (prevent abuse)
-  if (trimmedMessage.length > 2000) {
-    throw new AppError('Message too long (max 2000 characters)', 400, 'VALIDATION_ERROR');
-  }
-  
-  // Check if sessionId exists
-  if (!sessionId || typeof sessionId !== 'string') {
-    throw new AppError('Session ID is required', 400, 'VALIDATION_ERROR');
-  }
-  
-  // Sanitize message (basic XSS prevention)
-  req.body.message = trimmedMessage;
-  req.body.sessionId = sessionId.trim();
   
   next();
 };
 
-// Rate limit state (in production, use Redis or similar)
-const rateLimitStore = new Map();
-
-const rateLimiter = (maxRequests = 100, windowMs = 60000) => {
-  return (req, res, next) => {
-    const ip = req.ip || req.connection.remoteAddress || 'unknown';
-    const now = Date.now();
-    const windowStart = now - windowMs;
-    
-    // Get or create rate limit entry for this IP
-    if (!rateLimitStore.has(ip)) {
-      rateLimitStore.set(ip, []);
+// Rate limiter configuration
+const createRateLimiter = (maxRequests = 100, windowMs = 60000) => {
+  return rateLimit({
+    windowMs,
+    max: maxRequests,
+    message: {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many requests. Please try again later.'
+      }
+    },
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    keyGenerator: (req) => {
+      return req.ip || req.connection.remoteAddress || 'unknown';
+    },
+    handler: (req, res, next, options) => {
+      res.status(429).json(options.message);
     }
-    
-    const requests = rateLimitStore.get(ip);
-    
-    // Remove old requests outside the window
-    const validRequests = requests.filter(timestamp => timestamp > windowStart);
-    
-    // Check if rate limit exceeded
-    if (validRequests.length >= maxRequests) {
-      return res.status(429).json({
-        success: false,
-        error: {
-          code: 'RATE_LIMIT_EXCEEDED',
-          message: 'Too many requests. Please try again later.'
-        }
-      });
-    }
-    
-    // Add current request timestamp
-    validRequests.push(now);
-    rateLimitStore.set(ip, validRequests);
-    
-    next();
-  };
+  });
 };
 
-// Cleanup old rate limit entries periodically
+// Store for conversation sessions with cleanup
+const conversationStore = new Map();
+
+// Cleanup old conversations periodically
 setInterval(() => {
   const now = Date.now();
-  const windowMs = 60000; // 1 minute
-  const windowStart = now - windowMs;
+  const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT_MS, 10) || 3600000; // 1 hour default
   
-  for (const [ip, requests] of rateLimitStore.entries()) {
-    const validRequests = requests.filter(timestamp => timestamp > windowStart);
-    if (validRequests.length === 0) {
-      rateLimitStore.delete(ip);
-    } else {
-      rateLimitStore.set(ip, validRequests);
+  for (const [sessionId, data] of conversationStore.entries()) {
+    if (data.lastAccessed && (now - data.lastAccessed > sessionTimeout)) {
+      conversationStore.delete(sessionId);
     }
   }
-}, windowMs);
+}, 60000); // Run every minute
 
 module.exports = {
+  validateChatRequestRules,
   validateChatRequest,
-  rateLimiter
+  createRateLimiter,
+  conversationStore
 };

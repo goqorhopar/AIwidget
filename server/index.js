@@ -1,39 +1,180 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
+const helmet = require('helmet');
 const OpenAI = require('openai');
 const axios = require('axios');
-const { AppError, errorHandler, asyncHandler } = require('./middleware/errorHandler');
-const { validateChatRequest, rateLimiter } = require('./middleware/validator');
+const { v4: uuidv4 } = require('uuid');
+const Prometheus = require('prom-client');
+
+// Import local modules
+const { config, validateConfig } = require('./config');
 const logger = require('./utils/logger');
+const { AppError, errorHandler, asyncHandler } = require('./middleware/errorHandler');
+const { 
+  validateChatRequestRules, 
+  validateChatRequest, 
+  createRateLimiter 
+} = require('./middleware/validator');
+
+// Validate configuration on startup
+try {
+  validateConfig();
+  logger.info('Configuration validated successfully');
+} catch (error) {
+  logger.error('Configuration validation failed', { error: error.message });
+  console.error('❌ Configuration Error:', error.message);
+  process.exit(1);
+}
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = config.port;
 
-// Security middleware - rate limiting
-app.use(rateLimiter(100, 60000)); // 100 requests per minute per IP
+// ============================================
+// PROMETHEUS METRICS SETUP
+// ============================================
+const register = new Prometheus.Registry();
+Prometheus.collectDefaultMetrics({ register });
 
-// Logging middleware
-app.use(logger.requestLogger);
+// Custom metrics
+const httpRequestDuration = new Prometheus.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [0.1, 0.5, 1, 2, 5, 10]
+});
 
-// Middleware
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+const httpRequestTotal = new Prometheus.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status_code']
+});
+
+const chatRequestsTotal = new Prometheus.Counter({
+  name: 'chat_requests_total',
+  help: 'Total number of chat requests',
+  labelNames: ['is_lead']
+});
+
+const activeConnections = new Prometheus.Gauge({
+  name: 'active_connections',
+  help: 'Number of active connections'
+});
+
+register.registerMetric(httpRequestDuration);
+register.registerMetric(httpRequestTotal);
+register.registerMetric(chatRequestsTotal);
+register.registerMetric(activeConnections);
+
+// Metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// ============================================
+// SECURITY MIDDLEWARE
+// ============================================
+
+// Helmet for security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "https://api.openai.com", "https://api.telegram.org"]
+    }
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  },
+  noSniff: true,
+  xssFilter: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
 }));
-app.use(bodyParser.json({ limit: '1mb' }));
+
+// Rate limiting
+app.use(createRateLimiter(config.rateLimit.maxRequests, config.rateLimit.windowMs));
+
+// CORS configuration
+app.use(cors({
+  origin: config.cors.origin,
+  methods: config.cors.methods,
+  allowedHeaders: config.cors.allowedHeaders,
+  credentials: config.cors.origin !== '*'
+}));
+
+// ============================================
+// REQUEST PARSING & LOGGING
+// ============================================
+
+// Body parser with size limit
+app.use(express.json({ 
+  limit: '1mb',
+  strict: true
+}));
+
+// URL-encoded parser
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '1mb' 
+}));
+
+// Static files with caching
 app.use(express.static('public', {
   maxAge: '1d',
   etag: true,
-  lastModified: true
+  lastModified: true,
+  cacheControl: true
 }));
 
 // Request ID middleware
 app.use((req, res, next) => {
-  req.id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  req.id = uuidv4();
   res.setHeader('X-Request-ID', req.id);
+  res.setHeader('X-Powered-By', 'Neuro Sales Widget');
+  next();
+});
+
+// Metrics middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = (Date.now() - start) / 1000;
+    const route = req.route?.path || req.path;
+    
+    httpRequestDuration.observe(
+      { method: req.method, route, status_code: res.statusCode },
+      duration
+    );
+    
+    httpRequestTotal.inc({
+      method: req.method,
+      route,
+      status_code: res.statusCode
+    });
+  });
+  
+  next();
+});
+
+// Logging middleware
+app.use(logger.requestLogger);
+
+// Connection tracking
+app.use((req, res, next) => {
+  activeConnections.inc();
+  res.on('finish', () => activeConnections.dec());
   next();
 });
 
