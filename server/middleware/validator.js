@@ -6,6 +6,7 @@
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const { AppError } = require('./errorHandler');
+const logger = require('../utils/logger');
 
 // Validation rules for chat request
 const validateChatRequestRules = [
@@ -21,6 +22,7 @@ const validateChatRequestRules = [
     .isString().withMessage('Session ID must be a string')
     .trim()
     .isLength({ max: 256 }).withMessage('Session ID too long (max 256 characters)')
+    .matches(/^[a-zA-Z0-9_-]+$/).withMessage('Session ID contains invalid characters')
 ];
 
 // Middleware to handle validation results
@@ -52,30 +54,36 @@ const createRateLimiter = (maxRequests = 100, windowMs = 60000) => {
     keyGenerator: (req) => {
       return req.ip || req.connection.remoteAddress || 'unknown';
     },
-    handler: (req, res, next, options) => {
+    handler: (req, res, _next, options) => {
+      logger.warn('Rate limit exceeded', { ip: req.ip, path: req.path });
       res.status(429).json(options.message);
     },
     skip: (req) => {
       // Skip rate limiting for health checks
       return req.path === '/api/health' || req.path === '/metrics';
-    }
+    },
+    // Store rate limit data in memory (use Redis for production clusters)
+    validate: { xForwardedForHeader: true }
   });
 };
 
 // Store for conversation sessions with cleanup
 const conversationStore = new Map();
 
-// Cleanup old conversations periodically
+// Cleanup old conversations periodically to prevent memory leaks
+const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS, 10) || 3600000; // 1 hour default
+const CLEANUP_INTERVAL_MS = 60000; // Run every minute
+
 const cleanupIntervalId = setInterval(() => {
   const now = Date.now();
-  const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT_MS, 10) || 3600000; // 1 hour default
 
   for (const [sessionId, data] of conversationStore.entries()) {
-    if (data.lastAccessed && (now - data.lastAccessed > sessionTimeout)) {
+    if (data.lastAccessed && (now - data.lastAccessed > SESSION_TIMEOUT_MS)) {
       conversationStore.delete(sessionId);
+      logger.debug('Session cleaned up', { sessionId });
     }
   }
-}, 60000); // Run every minute
+}, CLEANUP_INTERVAL_MS);
 
 // Export cleanup function for testing
 const clearCleanupInterval = () => {
