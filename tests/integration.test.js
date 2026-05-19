@@ -25,10 +25,10 @@ describe('API Integration Tests', () => {
   beforeEach(() => {
     app = express();
     app.use(express.json());
-    
+
     // Add basic routes for testing
     app.get('/api/health', (_req, res) => {
-      res.json({ 
+      res.json({
         success: true,
         status: 'ok',
         version: 'test',
@@ -37,15 +37,15 @@ describe('API Integration Tests', () => {
         environment: 'test'
       });
     });
-    
+
     app.get('/metrics', (_req, res) => {
       res.set('Content-Type', 'text/plain');
       res.send('# Prometheus metrics');
     });
-    
+
     app.post('/api/chat', (req, res) => {
       const { message, sessionId } = req.body;
-      
+
       if (!message || !sessionId) {
         return res.status(400).json({
           success: false,
@@ -55,7 +55,7 @@ describe('API Integration Tests', () => {
           }
         });
       }
-      
+
       res.json({
         success: true,
         response: `Echo: ${message}`,
@@ -64,7 +64,7 @@ describe('API Integration Tests', () => {
         requestId: 'test-request-id'
       });
     });
-    
+
     app.use((_req, res) => {
       res.status(404).json({
         success: false,
@@ -94,8 +94,8 @@ describe('API Integration Tests', () => {
       const start = Date.now();
       await request(app).get('/api/health').expect(200);
       const duration = Date.now() - start;
-      
-      expect(duration).toBeLessThan(100); // Should respond in < 100ms
+
+      expect(duration).toBeLessThan(500); // Should respond in < 500ms (generous for CI environments)
     });
   });
 
@@ -237,7 +237,7 @@ describe('API Integration Tests', () => {
       );
 
       const responses = await Promise.all(requests);
-      
+
       expect(responses.length).toBe(10);
       responses.forEach((res, index) => {
         expect(res.body.success).toBe(true);

@@ -16,11 +16,11 @@ describe('Utility Functions', () => {
       const phoneRegex = /\+?[0-9]{1,4}?[-.\s]?\(?[0-9]{1,4}?\)?[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}/g;
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const urlRegex = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)/g;
-      
+
       const phones = message.match(phoneRegex) || [];
       const emails = message.match(emailRegex) || [];
       const urls = message.match(urlRegex) || [];
-      
+
       return {
         phones,
         emails,
@@ -66,7 +66,7 @@ describe('Utility Functions', () => {
   describe('Lead Stage Detection', () => {
     const detectLeadStage = (userMessage, _conversationHistory) => {
       const message = userMessage.toLowerCase();
-      
+
       const triggers = {
         'zoom': 'Согласие на встречу',
         'встреча': 'Согласие на встречу',
@@ -74,14 +74,15 @@ describe('Utility Functions', () => {
         'позвоните': 'Запрос звонка',
         'email': 'Оставил контакты',
         'интересует': 'Проявил интерес',
+        'да': 'Проявил интерес',
       };
-      
+
       for (const [keyword, stage] of Object.entries(triggers)) {
         if (message.includes(keyword) && stage) {
           return stage;
         }
       }
-      
+
       return null;
     };
 
@@ -110,33 +111,33 @@ describe('Utility Functions', () => {
     const analyzeClientNeeds = (conversationText) => {
       const lowerText = conversationText.toLowerCase();
       const needs = [];
-      
+
       // Check for average check mention
       const avgCheckMatch = lowerText.match(/средний чек[:\s]*([0-9\s.,]+)/i);
       if (avgCheckMatch) {
         needs.push(`Средний чек: ${avgCheckMatch[1].trim()}`);
       }
-      
+
       // Check for advertising channels
       if (lowerText.includes('реклама') || lowerText.includes('рекламу')) {
         needs.push('Привлекает клиентов через рекламу');
       }
-      
+
       // Check for website
       if (lowerText.includes('сайт') && !lowerText.includes('нет сайта')) {
         needs.push('Есть сайт');
       }
-      
+
       // Check for Yandex Direct
       if (lowerText.includes('яндекс') && lowerText.includes('директ')) {
         needs.push('Использует Яндекс Директ');
       }
-      
+
       // Check for sales department
       if (lowerText.includes('отдел продаж') || lowerText.includes('есть отдел')) {
         needs.push('Есть отдел продаж');
       }
-      
+
       return needs;
     };
 
@@ -173,8 +174,8 @@ describe('Utility Functions', () => {
 
   describe('Session ID Validation', () => {
     const isValidSessionId = (sessionId) => {
-      if (!sessionId || typeof sessionId !== 'string') return false;
-      if (sessionId.length > 256) return false;
+      if (!sessionId || typeof sessionId !== 'string') {return false;}
+      if (sessionId.length > 256) {return false;}
       return /^[a-zA-Z0-9_-]+$/.test(sessionId);
     };
 
@@ -198,7 +199,7 @@ describe('Utility Functions', () => {
 
   describe('Message Sanitization', () => {
     const sanitizeMessage = (message) => {
-      if (!message || typeof message !== 'string') return '';
+      if (!message || typeof message !== 'string') {return '';}
       return message
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
