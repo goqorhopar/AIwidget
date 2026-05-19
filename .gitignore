@@ -1,1 +1,57 @@
-Nothing needs to be added to .gitignore since the changes only include test files (.test.js) and a middleware file (.js), which are source code files that should be tracked in version control.
+```
+# Coverage reports
+coverage/
+*.lcov
+*.clover.xml
+
+# Test reports
+tests/**/*.xml
+tests/**/*.html
+
+# Temporary files
+*.tmp
+*.log
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Dependencies
+node_modules/
+.npm/
+.yarn/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+target/
+*.pyc
+__pycache__/
+*.class
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
+
+# Cache directories
+.cache/
+.mypy_cache/
+.pytest_cache/
+.gradle/
+.julia/
+zig-cache/
+```
